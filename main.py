@@ -1,3 +1,7 @@
+import asyncio
+# Fix for Pyrogram on newer Python versions
+asyncio.set_event_loop(asyncio.new_event_loop())
+
 import os
 import requests
 from bs4 import BeautifulSoup
