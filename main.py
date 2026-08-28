@@ -6,13 +6,14 @@ import requests
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto
 from db import db
-from ott.nf import get_netflix_poster # Aapki nayi Netflix file import ho gayi
+from ott.nf import get_netflix_data # Netflix scraper import kiya
 
 # Aapke Credentials
 BOT_TOKEN = "8603433381:AAFXNTkde8LbIzYO66Fajgxpde_DxDihops"
 API_ID = 32541562
 API_HASH = "e37e4432298d5a5eb4a6e32c18804283"
-POWERED_BY = "@MrSagarBots" # Aapke screenshot ke hisaab se username
+POWERED_BY = "@MrSagarBots" # Apna Channel Username yahan set karein
+UPDATE_CHANNEL_URL = "https://t.me/MrSagarBots" # Update channel ka link
 
 TMDB_BASE_URL = "https://tmdbapi.the-zake.workers.dev/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
@@ -44,16 +45,34 @@ async def scrape_netflix_cmd(client: Client, message: Message):
     url = message.text.split(" ", 1)[1].strip()
     msg = await message.reply_text("🟥 Netflix link scrape kar raha hoon... ⏳", reply_to_message_id=message.id)
     
-    image_url = get_netflix_poster(url)
+    # Naya function call jo dictionary return karega
+    netflix_data = get_netflix_data(url)
     
-    if image_url:
+    if netflix_data:
+        user_mention = message.from_user.mention
+        title = netflix_data["title"]
+        main_poster = netflix_data["main_poster"]
+        portrait = netflix_data["portrait"]
+        cover = netflix_data["cover"]
+        
+        # Exact Screenshot Format
         caption_text = (
-            f"🟥 **Netflix Thumbnail Extracted!**\n\n"
-            f"🔗 **Source Link:** [Click Here]({url})\n"
-            f"• **Image:** [Link (JPG)]({image_url})\n\n"
-            f"🚀 **Powered By** {POWERED_BY}"
+            f"{user_mention}\n"
+            f"`/nf {url}`\n\n"
+            f"**Netflix Poster:**\n"
+            f"{main_poster}\n\n"
+            f"**Portrait:** [Click Here]({portrait})\n\n"
+            f"**Cover:** [Click Here]({cover})\n\n"
+            f"**{title}**"
         )
-        await message.reply_photo(photo=image_url, caption=caption_text)
+        
+        # Niche ke buttons (Update Channel aur Image DL)
+        buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📢 Update Channel", url=UPDATE_CHANNEL_URL)],
+            [InlineKeyboardButton("🖼 Image DL", callback_data="coming_soon")]
+        ])
+        
+        await message.reply_photo(photo=main_poster, caption=caption_text, reply_markup=buttons)
         await msg.delete()
     else:
         await msg.edit_text("⚠️ Sorry, is URL se image nahi mil payi. Ya toh link galat hai ya platform block kar raha hai.")
@@ -96,7 +115,7 @@ async def show_options(client: Client, callback_query: CallbackQuery):
         [InlineKeyboardButton("🌄 Landscape", callback_data=f"img_backdrops_{movie_id}_0")],
         [InlineKeyboardButton("🅰 Logos", callback_data=f"img_logos_{movie_id}_0")],
         [InlineKeyboardButton("🌐 Search OTT Posters (Soon)", callback_data="coming_soon")],
-        [InlineKeyboardButton("🔙 Back to Results", callback_data="ignore"), # Added placeholder for back
+        [InlineKeyboardButton("🔙 Back to Results", callback_data="ignore"),
          InlineKeyboardButton("❌ Close", callback_data="close_menu")]
     ]
     await callback_query.message.edit_text(
@@ -193,7 +212,7 @@ async def ignore_btn(client: Client, callback_query: CallbackQuery):
 
 @app.on_callback_query(filters.regex("coming_soon"))
 async def coming_soon_btn(client: Client, callback_query: CallbackQuery):
-    await callback_query.answer("Ye feature jaldi aayega! Abhi sirf Netflix (/nf) active hai.", show_alert=True)
+    await callback_query.answer("Ye feature abhi develop ho raha hai!", show_alert=True)
 
 if __name__ == "__main__":
     app.run()
