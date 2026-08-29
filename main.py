@@ -16,7 +16,7 @@ from db import db
 BOT_TOKEN = "8603433381:AAFXNTkde8LbIzYO66Fajgxpde_DxDihops"
 API_ID = 32541562
 API_HASH = "e37e4432298d5a5eb4a6e32c18804283"
-ADMINS = [7006602588] 
+ADMINS = [2021145517] 
 POWERED_BY = "@MrSagarBots"
 UPDATE_CHANNEL_URL = "https://t.me/MrSagarBots"
 WELCOME_IMAGE = "https://i.ibb.co/Y49BGZbp/20260823-215817.jpg"
@@ -46,11 +46,11 @@ for file_path in glob.glob("ott/*.py"):
 # ==========================================
 async def check_access(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else None
-    if user_id in ADMINS: return True # Admins are always allowed
+    if user_id in ADMINS: return True # Admins ko hamesha access hai
         
     # 1. Block Private Messages (PMs)
     if message.chat.type == ChatType.PRIVATE:
-        await message.reply_text("⚠️ **Access Denied!**\nYe bot PM me kaam nahi karta. Sirf Authorized Groups me allow hai.")
+        await message.reply_text("⚠️ **Access Denied!**\nYe bot PM (Private Message) me kaam nahi karta. Kripya ise kisi authorized group me use karein.")
         return False
         
     # 2. Strict Group Authorization
@@ -66,10 +66,11 @@ async def check_access(client: Client, message: Message):
     return False
 
 async def is_authorized(callback_query: CallbackQuery):
-    """Ensure no one else can click the buttons"""
+    """Ensure no one else can click the buttons, even Anonymous Admins"""
     if callback_query.message.reply_to_message:
         orig_msg = callback_query.message.reply_to_message
-        # Handle Anonymous Admins correctly
+        
+        # Anonymous Admin Fix
         requester_id = orig_msg.from_user.id if orig_msg.from_user else (orig_msg.sender_chat.id if orig_msg.sender_chat else None)
         
         if requester_id and callback_query.from_user.id != requester_id:
