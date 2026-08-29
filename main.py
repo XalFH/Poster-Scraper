@@ -9,13 +9,16 @@ from pyrogram.enums import ChatType
 from db import db
 from ott.nf import get_netflix_data
 
-# Credentials
+# ==========================================
+# ⚙️ CONFIGURATION
+# ==========================================
 BOT_TOKEN = "8603433381:AAFXNTkde8LbIzYO66Fajgxpde_DxDihops"
 API_ID = 32541562
 API_HASH = "e37e4432298d5a5eb4a6e32c18804283"
-ADMINS = [7006602588] # Apna Admin ID yahan daalein
+ADMINS = [7006602588] 
 POWERED_BY = "@MrSagarBots"
 UPDATE_CHANNEL_URL = "https://t.me/MrSagarBots"
+WELCOME_IMAGE = "https://i.ibb.co/Y49BGZbp/20260823-215817.jpg"
 
 TMDB_BASE_URL = "https://tmdbapi.the-zake.workers.dev/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
@@ -23,20 +26,20 @@ TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
 app = Client("PremiumPosterBot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
 
 # ==========================================
-# 🛡 MIDDLEWARES (FSUB & AUTH GROUPS)
+# 🛡 MIDDLEWARES (STRICT FSUB & AUTH)
 # ==========================================
 async def check_access(client: Client, message: Message):
-    """FSub aur Authorized Groups check karta hai"""
     settings = await db.get_settings()
     
-    # 1. Group Authorization Check
+    # 1. STRICT Group Authorization Check
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         auth_groups = settings.get("auth_groups", [])
-        if message.chat.id not in auth_groups:
-            await message.reply_text("⚠️ Ye bot is group me allowed nahi hai! Contact Admin.")
+        # Agar admin ne koi bhi group auth kiya hai, toh unauthorized groups ko block kar do
+        if len(auth_groups) > 0 and message.chat.id not in auth_groups:
+            await message.reply_text("⚠️ **Access Denied!**\nYe bot yahan allowed nahi hai. Contact Admin.")
             await message.chat.leave()
             return False
-        return True # Group check pass
+        return True
         
     # 2. Private Chat FSub Check
     if message.chat.type == ChatType.PRIVATE:
@@ -47,14 +50,14 @@ async def check_access(client: Client, message: Message):
             try:
                 await client.get_chat_member(fsub_id, message.from_user.id)
             except UserNotParticipant:
-                btn = [[InlineKeyboardButton("📢 Join Channel", url=fsub_link)]]
+                btn = [[InlineKeyboardButton("📢 Join Channel To Use Bot", url=fsub_link)]]
                 await message.reply_text(
                     "⚠️ **Access Denied!**\n\nBot use karne ke liye pehle hamara official channel join karein.",
                     reply_markup=InlineKeyboardMarkup(btn)
                 )
                 return False
             except Exception as e:
-                print(f"FSub Error: {e}")
+                print(f"FSub Check Failed: {e}")
                 
     return True
 
@@ -73,10 +76,10 @@ async def admin_dashboard(client: Client, message: Message):
         f"📝 **Log Channel:** `{settings.get('log_channel', 'Not Set')}`\n"
         f"🛡 **Auth Groups Count:** {len(settings.get('auth_groups', []))}\n\n"
         "**Commands:**\n"
-        "`/setfsub <channel_id> <link>` - Set Force Sub\n"
-        "`/setlog <channel_id>` - Set New User Alerts\n"
-        "`/auth` - Group me command deke authorize karein\n"
-        "`/broadcast` (Reply to msg) - Sabko msg bhejein"
+        "`/setfsub <channel_id> <link>` - Set FSub\n"
+        "`/setlog <channel_id>` - Set Alert Channel\n"
+        "`/auth` - Group me deke authorize karein\n"
+        "`/broadcast` (Reply) - Sabko msg bhejein"
     )
     await message.reply_text(text)
 
@@ -86,157 +89,198 @@ async def set_fsub(client, message):
         _, ch_id, link = message.text.split(" ", 2)
         await db.update_setting("fsub_id", int(ch_id))
         await db.update_setting("fsub_link", link)
-        await message.reply_text(f"✅ FSub Set Successfully!\nID: {ch_id}\nLink: {link}")
-    except:
-        await message.reply_text("❌ Syntax Error: `/setfsub -100xxxx https://t.me/...`")
+        await message.reply_text(f"✅ FSub Set Successfully!")
+    except: await message.reply_text("❌ Format: `/setfsub -100xxx https://t.me/...`")
 
 @app.on_message(filters.command("setlog") & filters.user(ADMINS))
 async def set_log(client, message):
     try:
-        ch_id = int(message.command[1])
-        await db.update_setting("log_channel", ch_id)
-        await message.reply_text(f"✅ Log Channel Set to: {ch_id}")
-    except:
-        await message.reply_text("❌ Syntax Error: `/setlog -100xxxx`")
+        await db.update_setting("log_channel", int(message.command[1]))
+        await message.reply_text(f"✅ Log Channel Set!")
+    except: await message.reply_text("❌ Format: `/setlog -100xxx`")
 
 @app.on_message(filters.command("auth") & filters.user(ADMINS) & filters.group)
 async def auth_group(client, message):
     await db.add_auth_group(message.chat.id)
-    await message.reply_text(f"✅ Ye group ab authorized hai! Bot yahan kaam karega.")
+    await message.reply_text("✅ Group Authorized! Bot ab yahan strictly kaam karega.")
 
 @app.on_message(filters.command("broadcast") & filters.user(ADMINS))
 async def broadcast_msg(client, message):
-    if not message.reply_to_message:
-        return await message.reply_text("⚠️ Kripya us message par reply karein jise broadcast karna hai.")
-    
-    msg = await message.reply_text("🚀 Broadcasting started...")
+    if not message.reply_to_message: return await message.reply_text("⚠️ Message par reply karein.")
+    msg = await message.reply_text("🚀 Broadcasting...")
     users = await db.get_all_users()
     success, failed = 0, 0
-    
     async for user in users:
         try:
             await message.reply_to_message.copy(user["_id"])
             success += 1
-            await asyncio.sleep(0.1) # Flood wait avoid
-        except:
-            failed += 1
-            
-    await msg.edit_text(f"✅ **Broadcast Complete!**\n\n🟢 Success: {success}\n🔴 Failed: {failed}")
+            await asyncio.sleep(0.1)
+        except: failed += 1
+    await msg.edit_text(f"✅ **Broadcast Complete!**\n🟢 Success: {success} | 🔴 Failed: {failed}")
 
 # ==========================================
-# 🎬 MAIN BOT COMMANDS
+# 🎬 MAIN BOT COMMANDS (WITH WELCOME MENU)
 # ==========================================
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
     if not await check_access(client, message): return
     
-    # New User Logic & Logging
     is_new = await db.add_user(message.from_user.id)
     if is_new:
         settings = await db.get_settings()
         log_id = settings.get("log_channel")
         if log_id:
-            try:
-                await client.send_message(log_id, f"🆕 **New User Alert!**\n\n👤 Name: {message.from_user.mention}\n🆔 ID: `{message.from_user.id}`")
+            try: await client.send_message(log_id, f"🆕 **New User Alert!**\n👤 {message.from_user.mention} | 🆔 `{message.from_user.id}`")
             except: pass
 
-    text = "🔥 **Premium Poster Extract Bot** 🔥\n\n🎬 `/p {name}` - Posters/Screenshots.\n🟥 `/nf {url}` - Netflix thumbnail."
-    await message.reply_text(text)
+    text = "🔥 **Welcome to Premium Poster Extractor!** 🔥\n\nHigh-Quality Posters, Clean Screenshots, and Logos from TMDB & OTT platforms."
+    buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("ℹ️ About Bot", callback_data="about_bot"), InlineKeyboardButton("❓ Help", callback_data="help_bot")],
+        [InlineKeyboardButton("📢 Updates Channel", url=UPDATE_CHANNEL_URL)]
+    ])
+    await message.reply_photo(photo=WELCOME_IMAGE, caption=text, reply_markup=buttons)
 
-@app.on_message(filters.command("nf"))
-async def scrape_netflix_cmd(client: Client, message: Message):
-    if not await check_access(client, message): return
-    if len(message.command) < 2: return await message.reply_text("Example: `/nf https://www.netflix.com/title/...`")
-    
-    url = message.text.split(" ", 1)[1].strip()
-    msg = await message.reply_text("🟥 Netflix link scrape kar raha hoon... ⏳")
-    netflix_data = get_netflix_data(url)
-    
-    if netflix_data:
-        caption_text = f"{message.from_user.mention}\n`/nf {url}`\n\n**Netflix Poster:**\n{netflix_data['main_poster']}\n\n**Portrait:** [Click Here]({netflix_data['portrait']})\n\n**Cover:** [Click Here]({netflix_data['cover']})\n\n**{netflix_data['title']}**"
-        buttons = InlineKeyboardMarkup([[InlineKeyboardButton("📢 Update Channel", url=UPDATE_CHANNEL_URL)]])
-        await message.reply_photo(photo=netflix_data['main_poster'], caption=caption_text, reply_markup=buttons)
-        await msg.delete()
+@app.on_callback_query(filters.regex(r"^(about_bot|help_bot|start_menu)$"))
+async def home_menus(client: Client, callback_query: CallbackQuery):
+    data = callback_query.data
+    if data == "about_bot":
+        text = "ℹ️ **About Bot**\n\nYe bot editors aur channel admins ke liye banaya gaya hai jisse aap TMDB aur OTT platforms se High-Quality Backgrounds (Clean Screenshots), Title Text wale Posters, aur Logos nikal sakte hain."
+    elif data == "help_bot":
+        text = "❓ **Help & Commands**\n\n🎬 `/p <name>` - Search Movies/Series (eg: `/p War 2019`)\n🟥 `/nf <url>` - Extract Netflix Thumbnail\n\n*(Naye OTT scrapers add hote hi unki commands yahan update ki jayengi!)*"
     else:
-        await msg.edit_text("⚠️ Sorry, link invalid ya blocked hai.")
+        text = "🔥 **Welcome to Premium Poster Extractor!** 🔥\n\nHigh-Quality Posters, Clean Screenshots, and Logos from TMDB & OTT platforms."
+        
+    buttons = InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Back to Home", callback_data="start_menu")]]) if data != "start_menu" else InlineKeyboardMarkup([
+        [InlineKeyboardButton("ℹ️ About Bot", callback_data="about_bot"), InlineKeyboardButton("❓ Help", callback_data="help_bot")],
+        [InlineKeyboardButton("📢 Updates Channel", url=UPDATE_CHANNEL_URL)]
+    ])
+    await callback_query.message.edit_caption(caption=text, reply_markup=buttons)
 
+# ==========================================
+# 🔍 SEARCH SYSTEM (ADVANCED YEAR SUPPORT)
+# ==========================================
 @app.on_message(filters.command("p"))
 async def search_media(client: Client, message: Message):
     if not await check_access(client, message): return
-    if len(message.command) < 2: return await message.reply_text("Example: `/p Alpha`")
+    if len(message.command) < 2: return await message.reply_text("Example: `/p War 2019`")
     
-    query = message.text.split(" ", 1)[1].strip()
-    msg = await message.reply_text(f"🔍 Searching for '{query}'...")
+    raw_query = message.text.split(" ", 1)[1].strip()
     
-    res = requests.get(f"{TMDB_BASE_URL}/search/multi", params={"query": query}).json()
-    filtered_results = [r for r in res.get("results", []) if r.get("media_type") in ["movie", "tv"]]
+    # Year Extraction Logic ("War 2019" -> Query: "War", Year: "2019")
+    parts = raw_query.split()
+    year = ""
+    query = raw_query
+    if len(parts) > 1 and parts[-1].isdigit() and len(parts[-1]) == 4:
+        year = parts[-1]
+        query = " ".join(parts[:-1])
     
-    if not filtered_results: return await msg.edit_text("Sorry, aisi koi Movie/Series nahi mili.")
+    msg = await message.reply_text(f"🔍 Searching for '{raw_query}'...")
+    
+    # Search API Call
+    if year:
+        # Search movie and TV separately if year is explicitly provided
+        m_res = requests.get(f"{TMDB_BASE_URL}/search/movie", params={"query": query, "primary_release_year": year}).json()
+        t_res = requests.get(f"{TMDB_BASE_URL}/search/tv", params={"query": query, "first_air_date_year": year}).json()
+        results = m_res.get("results", []) + t_res.get("results", [])
+    else:
+        res = requests.get(f"{TMDB_BASE_URL}/search/multi", params={"query": query}).json()
+        results = [r for r in res.get("results", []) if r.get("media_type") in ["movie", "tv"]]
+    
+    if not results: return await msg.edit_text("Sorry, aisi koi Movie/Series nahi mili.")
 
     buttons = []
-    for item in filtered_results[:6]:
+    for item in results[:6]:
         title = item.get('title') or item.get('name', 'Unknown')
         date = item.get('release_date') or item.get('first_air_date', '')
-        year = date[:4] if date else "N/A"
-        icon = "🎬" if item.get('media_type') == "movie" else "📺"
-        buttons.append([InlineKeyboardButton(f"{icon} {title} ({year})", callback_data=f"opt_{item.get('media_type')}_{item.get('id')}")])
+        r_year = date[:4] if date else "N/A"
+        
+        # Identify type if from mixed results
+        m_type = item.get('media_type')
+        if not m_type: m_type = "movie" if "title" in item else "tv"
+            
+        icon = "🎬" if m_type == "movie" else "📺"
+        # format: opt_{movie/tv}_{id} -> opt_m_123 or opt_t_123 (Shortened to save callback limits)
+        short_type = "m" if m_type == "movie" else "t"
+        buttons.append([InlineKeyboardButton(f"{icon} {title} ({r_year})", callback_data=f"opt_{short_type}_{item.get('id')}")])
     
     buttons.append([InlineKeyboardButton("❌ Close", callback_data="close_menu")])
-    await msg.edit_text(f"🔍 Search: **{query}**\n\n✨ **Select a Movie or Series:**", reply_markup=InlineKeyboardMarkup(buttons))
+    await msg.edit_text(f"🔍 Search: **{raw_query}**\n\n✨ **Select Media:**", reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- CATEGORY MENU (Smart Filter Logic Added) ---
+# ==========================================
+# 📱 DYNAMIC MENUS & SUB-MENUS
+# ==========================================
+# 1. Main Category Menu
 @app.on_callback_query(filters.regex(r"^opt_"))
-async def show_options(client: Client, callback_query: CallbackQuery):
+async def show_main_options(client: Client, callback_query: CallbackQuery):
+    # Data: opt_{m/t}_{id}
     data = callback_query.data.split("_")
-    m_type, m_id = data[1], data[2]
+    s_type, m_id = data[1], data[2]
+    type_label = "Movie" if s_type == "m" else "Web Series"
     
     buttons = [
-        [InlineKeyboardButton("🖼 Thumbnails (With Text)", callback_data=f"img_text_{m_type}_{m_id}_0")],
-        [InlineKeyboardButton("🌄 Screenshots (Clean/N/A)", callback_data=f"img_notext_{m_type}_{m_id}_0")],
-        [InlineKeyboardButton("🅰 Logos", callback_data=f"img_logos_{m_type}_{m_id}_0")],
+        [InlineKeyboardButton("🌄 Landscape (Horizontal)", callback_data=f"sub_b_{s_type}_{m_id}")],
+        [InlineKeyboardButton("🖼 Portrait (Vertical)", callback_data=f"sub_p_{s_type}_{m_id}")],
+        [InlineKeyboardButton("🅰 Logos", callback_data=f"img_l_all_{s_type}_{m_id}_0")], # Direct to logos
         [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
     ]
-    await callback_query.message.edit_text("✨ **Choose Image Type:**", reply_markup=InlineKeyboardMarkup(buttons))
+    await callback_query.message.edit_text(f"✨ **{type_label} Selected!**\nChoose aspect ratio:", reply_markup=InlineKeyboardMarkup(buttons))
 
-# --- IMAGE VIEWER & PAGINATION ---
+# 2. Text vs Clean Sub-Menu
+@app.on_callback_query(filters.regex(r"^sub_"))
+async def show_sub_options(client: Client, callback_query: CallbackQuery):
+    # Data: sub_{b/p}_{s_type}_{m_id} (b=backdrops/landscape, p=posters/portrait)
+    data = callback_query.data.split("_")
+    cat, s_type, m_id = data[1], data[2], data[3]
+    cat_label = "Landscape" if cat == "b" else "Portrait"
+    
+    buttons = [
+        [InlineKeyboardButton("📝 Posters (With Text/Language)", callback_data=f"img_{cat}_txt_{s_type}_{m_id}_0")],
+        [InlineKeyboardButton("🖼 Screenshots (Clean/Without Text)", callback_data=f"img_{cat}_cln_{s_type}_{m_id}_0")],
+        [InlineKeyboardButton("🔙 Back", callback_data=f"opt_{s_type}_{m_id}")]
+    ]
+    await callback_query.message.edit_text(f"**{cat_label} Options:**\nText wali image chahiye ya clean background?", reply_markup=InlineKeyboardMarkup(buttons))
+
+# ==========================================
+# 🖼 IMAGE VIEWER (SMART FILTERING)
+# ==========================================
 @app.on_callback_query(filters.regex(r"^img_"))
 async def paginate_images(client: Client, callback_query: CallbackQuery):
+    # Data: img_{cat}_{flt}_{s_type}_{m_id}_{index}
     data = callback_query.data.split("_")
-    filter_type, m_type, m_id, index = data[1], data[2], data[3], int(data[4])
+    cat, flt, s_type, m_id, index = data[1], data[2], data[3], data[4], int(data[5])
+    
+    m_type = "movie" if s_type == "m" else "tv"
     
     movie_info = requests.get(f"{TMDB_BASE_URL}/{m_type}/{m_id}").json()
     name = movie_info.get("title") or movie_info.get("name", "Unknown")
     
     res = requests.get(f"{TMDB_BASE_URL}/{m_type}/{m_id}/images").json()
     
-    # Smart Filtering Logic
-    if filter_type == "logos":
-        raw_images = res.get("logos", [])
-    else:
-        # Both thumbnails and screenshots come from backdrops/posters. 
-        # Using backdrops as they usually have the clean vs text variations.
-        raw_images = res.get("backdrops", []) + res.get("posters", [])
-        
-    if filter_type == "text":
-        # Jisme language (iso_639_1) likhi ho wo Thumbnails
-        images_list = [img for img in raw_images if img.get('iso_639_1') is not None]
-    elif filter_type == "notext":
-        # Jisme language N/A ya None ho wo Screenshots
+    # Map category codes
+    cat_key = "backdrops" if cat == "b" else "posters" if cat == "p" else "logos"
+    raw_images = res.get(cat_key, [])
+    
+    # SMART FILTERING LOGIC
+    if flt == "txt":
+        # With Text (Language is present and not 'xx')
+        images_list = [img for img in raw_images if img.get('iso_639_1') is not None and img.get('iso_639_1') != "xx"]
+    elif flt == "cln":
+        # Screenshots / Clean (Language is None or 'xx')
         images_list = [img for img in raw_images if img.get('iso_639_1') is None or img.get('iso_639_1') == "xx"]
     else:
-        images_list = raw_images
+        images_list = raw_images # For Logos ('all')
         
     if not images_list:
-        return await callback_query.answer("Is category me image nahi mili!", show_alert=True)
+        return await callback_query.answer("❌ Is criteria me koi image nahi mili!", show_alert=True)
         
     if index >= len(images_list) or index < 0: index = 0
     img_data = images_list[index]
     full_image_url = f"{TMDB_IMAGE_BASE}{img_data['file_path']}"
     
-    # Caption Setup
+    # Formatting
     lang = img_data.get('iso_639_1')
-    lang_display = lang if lang else "N/A (Clean)"
-    cat_display = "Thumbnail" if filter_type == "text" else "Screenshot" if filter_type == "notext" else "Logo"
+    lang_display = lang if lang and lang != 'xx' else "N/A (Clean)"
+    cat_display = "Landscape" if cat == "b" else "Portrait" if cat == "p" else "Logo"
     
     caption_text = (
         f"🔍 **Search:** {name}\n\n"
@@ -246,8 +290,9 @@ async def paginate_images(client: Client, callback_query: CallbackQuery):
         f"• **Image:** [Link (JPG)]({full_image_url})\n\n"
         f"🚀 **Powered By** {POWERED_BY}"
     )
-    cb_prefix = f"img_{filter_type}_{m_type}_{m_id}"
+    cb_prefix = f"img_{cat}_{flt}_{s_type}_{m_id}"
 
+    # Smooth Navigation & Back Buttons
     nav_buttons = []
     if index > 0: nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"{cb_prefix}_{index-1}"))
     else: nav_buttons.append(InlineKeyboardButton("⛔", callback_data="ignore"))
@@ -256,10 +301,13 @@ async def paginate_images(client: Client, callback_query: CallbackQuery):
     
     if index < len(images_list) - 1: nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"{cb_prefix}_{index+1}"))
     else: nav_buttons.append(InlineKeyboardButton("⛔", callback_data="ignore"))
+    
+    # Smart Back Button logic
+    back_data = f"opt_{s_type}_{m_id}" if cat == "l" else f"sub_{cat}_{s_type}_{m_id}"
         
     markup = InlineKeyboardMarkup([
         nav_buttons,
-        [InlineKeyboardButton("🔙 Back", callback_data=f"opt_{m_type}_{m_id}")],
+        [InlineKeyboardButton("🔙 Back", callback_data=back_data)],
         [InlineKeyboardButton("❌ Close", callback_data="close_menu")]
     ])
     
@@ -272,6 +320,9 @@ async def paginate_images(client: Client, callback_query: CallbackQuery):
     except Exception as e:
         await callback_query.answer("Error loading image!", show_alert=True)
 
+# ==========================================
+# 🛑 UTILITY (CLOSE, IGNORE) & OTT MODULE INTEGRATION
+# ==========================================
 @app.on_callback_query(filters.regex("close_menu"))
 async def close_menu(client, callback_query):
     await callback_query.message.delete()
@@ -279,6 +330,10 @@ async def close_menu(client, callback_query):
 @app.on_callback_query(filters.regex("ignore"))
 async def ignore_btn(client, callback_query):
     await callback_query.answer()
+
+# NOTE: Future OTT Integration
+# Agar aap `ott/prime.py` banate hain, toh bas usko upar import karein 
+# Aur yahan /prime ka command ekdum Netflix (/nf) ki tarah paste kar dein. Code already uske liye ready hai!
 
 if __name__ == "__main__":
     app.run()
