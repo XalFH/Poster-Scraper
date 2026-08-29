@@ -1,11 +1,10 @@
 import requests
 from bs4 import BeautifulSoup
-import json
+import re
 
 def scrape(url):
     """
-    Standard Scraper Function for Dynamic Loader.
-    Return dictionary: title, main_poster, portrait, cover
+    Netflix URL se Main Poster, Logos aur Backgrounds (Assets) extract karta hai.
     """
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -13,36 +12,36 @@ def scrape(url):
     try:
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code == 200:
-            soup = BeautifulSoup(response.content, 'html.parser')
-            data = {"title": "Netflix Title", "main_poster": "", "portrait": "", "cover": ""}
+            soup = BeautifulSoup(response.text, 'html.parser')
+            data = {"title": "Netflix Title", "main_poster": "", "assets": []}
             
+            # 1. Extract Title
             title_tag = soup.find('title')
             if title_tag:
                 data["title"] = title_tag.text.replace(" | Netflix Official Site", "").replace(" | Netflix", "").strip()
             
-            twitter_img = soup.find("meta", attrs={"name": "twitter:image"})
-            if twitter_img: data["main_poster"] = twitter_img["content"]
-            
+            # 2. Extract Main Boxart Poster
             og_img = soup.find("meta", property="og:image")
             if og_img:
-                data["cover"] = og_img["content"]
-                if not data["main_poster"]: data["main_poster"] = og_img["content"]
-            
-            script_tag = soup.find('script', type='application/ld+json')
-            if script_tag:
-                try:
-                    json_data = json.loads(script_tag.string)
-                    if data["title"] == "Netflix Title": data["title"] = json_data.get("name", data["title"])
-                    image_data = json_data.get("image", [])
-                    if isinstance(image_data, str): data["portrait"] = image_data
-                    elif isinstance(image_data, list) and len(image_data) > 0:
-                        data["portrait"] = image_data[1] if len(image_data) > 1 else image_data[0]
-                except: pass
-            
-            if not data["portrait"]: data["portrait"] = data["main_poster"]
-            if not data["cover"]: data["cover"] = data["main_poster"]
+                data["main_poster"] = og_img["content"]
                 
-            if data["main_poster"]: return data
+            # 3. Extract All Hidden Assets (Logos & Backgrounds)
+            # Regex se backend API links nikal rahe hain jo Inspect Element me dikhte hain
+            raw_urls = re.findall(r'https://occ-[^"\']+\.nflxso\.net/dnm/api/v6/[^"\'\\]+', response.text)
+            
+            valid_assets = []
+            for u in raw_urls:
+                clean_url = u.replace('\\u002F', '/')
+                # Sirf valid images rakhein aur duplicates hatayein
+                if ('.webp' in clean_url or '.jpg' in clean_url or '.png' in clean_url) and clean_url not in valid_assets:
+                    valid_assets.append(clean_url)
+                    
+            # Top 6 raw assets limit karke bhej rahe hain taaki message zyada bada na ho
+            data["assets"] = valid_assets[:6]
+            
+            if data["main_poster"]: 
+                return data
+                
     except Exception as e:
         print(f"Scrape Error: {e}")
     return None
