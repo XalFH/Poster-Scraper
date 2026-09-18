@@ -129,7 +129,7 @@ async def dynamic_ott_cmd(client: Client, message: Message):
         return await message.reply_text(f"⚠️ **Missing URL.** Example: `/{cmd} <url>`", quote=True)
     
     url = message.text.split(" ", 1)[1].strip()
-    msg = await message.reply_text(f"🔄 Processing **{cmd.upper()}** payload via API... ⏳", quote=True)
+    msg = await message.reply_text(f"🔄 Processing payload via API... ⏳", quote=True)
     
     data = scrape_ott(cmd, url)
     
@@ -137,28 +137,25 @@ async def dynamic_ott_cmd(client: Client, message: Message):
         uid = str(message.from_user.id if message.from_user else 0)
         cache_id = str(msg.id)
         
-        # Save to stateless dictionary mapping
+        # Save payload to cache + Original Command Message ID
         data['platform'] = cmd
+        data['cmd_msg_id'] = message.id
         OTT_CACHE[cache_id] = data
         
-        init_img = data.get("landscape") or data.get("portrait") or data.get("cover")
-        if not init_img:
-            return await msg.edit_text("⚠️ **Extraction Failed.** Valid images were not provided by the API.")
-            
         buttons = []
         if data.get("landscape"): buttons.append([InlineKeyboardButton("🌄 Landscape", callback_data=f"ottcb_landscape_{cache_id}_{uid}")])
         if data.get("portrait"): buttons.append([InlineKeyboardButton("🖼 Portrait", callback_data=f"ottcb_portrait_{cache_id}_{uid}")])
-        if data.get("cover"): buttons.append([InlineKeyboardButton("📚 Cover", callback_data=f"ottcb_cover_{cache_id}_{uid}")])
+        if data.get("cover"): buttons.append([InlineKeyboardButton("📚 Cover (Clean)", callback_data=f"ottcb_cover_{cache_id}_{uid}")])
         buttons.append([InlineKeyboardButton("❌ Close Menu", callback_data=f"close_{uid}")])
         
         caption = (
-            f"🎬 **Title:** **{data.get('title', 'Unknown Title')}**\n"
+            f"🎬 **Title:** `{data.get('title', 'Unknown Title')}`\n"
             f"🌐 **Platform:** {cmd.upper()}\n\n"
             f"_Please select an image format below:_"
         )
         
-        await message.reply_photo(photo=init_img, caption=caption, reply_markup=InlineKeyboardMarkup(buttons), reply_to_message_id=message.id)
-        await msg.delete()
+        # NOTE: Send ONLY text first (no image loaded initially)
+        await msg.edit_text(text=caption, reply_markup=InlineKeyboardMarkup(buttons))
     else: 
         await msg.edit_text("⚠️ **Extraction Failed.** The link might be invalid, or the API encountered an error.")
 
@@ -178,19 +175,29 @@ async def ott_view_image(client: Client, callback_query: CallbackQuery):
     
     img_url = data.get(img_format)
     caption = (
-        f"🎬 **Title:** **{data.get('title', 'Unknown')}**\n"
+        f"🎬 **Title:** `{data.get('title', 'Unknown')}`\n"
         f"📐 **Format:** {img_format.capitalize()}\n\n"
-        f"🔗 **Raw Image:** [Direct Link]({img_url})"
+        f"🔗 **Raw Image:** [View Source]({img_url})"
     )
     
     buttons = [
-        [InlineKeyboardButton("⬇️ Download as File", callback_data=f"ottdl_{img_format}_{cache_id}_{uid}")],
-        [InlineKeyboardButton("🔙 Go Back", callback_data=f"ottback_{cache_id}_{uid}")],
-        [InlineKeyboardButton("❌ Close", callback_data=f"close_{uid}")]
+        [InlineKeyboardButton("⬇️ Download HQ File", callback_data=f"ottdl_{img_format}_{cache_id}_{uid}")],
+        [InlineKeyboardButton("🔙 Go Back", callback_data=f"ottback_{cache_id}_{uid}"), InlineKeyboardButton("❌ Close", callback_data=f"close_{uid}")]
     ]
     
     try:
-        await callback_query.edit_message_media(media=InputMediaPhoto(media=img_url, caption=caption), reply_markup=InlineKeyboardMarkup(buttons))
+        # If currently a text message, delete it and send a high-quality Photo Message
+        if not callback_query.message.photo:
+            await callback_query.message.delete()
+            await client.send_photo(
+                chat_id=callback_query.message.chat.id, 
+                photo=img_url, 
+                caption=caption, 
+                reply_markup=InlineKeyboardMarkup(buttons),
+                reply_to_message_id=data.get('cmd_msg_id') # Keep it linked to original command
+            )
+        else:
+            await callback_query.edit_message_media(media=InputMediaPhoto(media=img_url, caption=caption), reply_markup=InlineKeyboardMarkup(buttons))
     except Exception:
         await callback_query.answer("⚠️ Network error while rendering image.", show_alert=True)
 
@@ -204,19 +211,31 @@ async def ott_go_back(client: Client, callback_query: CallbackQuery):
     data = OTT_CACHE.get(cache_id)
     if not data:
         return await callback_query.answer("⚠️ Session Expired!", show_alert=True)
-        
-    init_img = data.get("landscape") or data.get("portrait") or data.get("cover")
     
     buttons = []
     if data.get("landscape"): buttons.append([InlineKeyboardButton("🌄 Landscape", callback_data=f"ottcb_landscape_{cache_id}_{uid}")])
     if data.get("portrait"): buttons.append([InlineKeyboardButton("🖼 Portrait", callback_data=f"ottcb_portrait_{cache_id}_{uid}")])
-    if data.get("cover"): buttons.append([InlineKeyboardButton("📚 Cover", callback_data=f"ottcb_cover_{cache_id}_{uid}")])
+    if data.get("cover"): buttons.append([InlineKeyboardButton("📚 Cover (Clean)", callback_data=f"ottcb_cover_{cache_id}_{uid}")])
     buttons.append([InlineKeyboardButton("❌ Close Menu", callback_data=f"close_{uid}")])
     
-    caption = f"🎬 **Title:** **{data.get('title', 'Unknown')}**\n🌐 **Platform:** {data.get('platform', '').upper()}\n\n_Please select an image format below:_"
+    caption = (
+        f"🎬 **Title:** `{data.get('title', 'Unknown')}`\n"
+        f"🌐 **Platform:** {data.get('platform', '').upper()}\n\n"
+        f"_Please select an image format below:_"
+    )
     
     try:
-        await callback_query.edit_message_media(media=InputMediaPhoto(media=init_img, caption=caption), reply_markup=InlineKeyboardMarkup(buttons))
+        # Delete photo message and return to the Text-Only UI
+        if callback_query.message.photo:
+            await callback_query.message.delete()
+            await client.send_message(
+                chat_id=callback_query.message.chat.id, 
+                text=caption, 
+                reply_markup=InlineKeyboardMarkup(buttons),
+                reply_to_message_id=data.get('cmd_msg_id')
+            )
+        else:
+            await callback_query.edit_message_text(text=caption, reply_markup=InlineKeyboardMarkup(buttons))
     except Exception:
         pass
 
@@ -243,7 +262,7 @@ async def ott_download_file(client: Client, callback_query: CallbackQuery):
             await client.send_document(
                 chat_id=callback_query.message.chat.id,
                 document=file_stream,
-                caption=f"📁 **{img_format.capitalize()} High-Res Image**\n🎬 **Title:** {data.get('title')}",
+                caption=f"📁 **{img_format.capitalize()} Uncompressed Image**\n🎬 **Title:** {data.get('title')}",
                 reply_to_message_id=callback_query.message.id
             )
         else:
@@ -324,7 +343,7 @@ async def tmdb_sub_options(client: Client, callback_query: CallbackQuery):
     cat_label = "Landscape" if cat == "b" else "Portrait"
     
     buttons = [
-        [InlineKeyboardButton("📝 Posters (Contains Text/Title)", callback_data=f"img_{cat}_txt_{s_type}_{m_id}_0_{uid}")],
+        [InlineKeyboardButton("📝 Posters (Contains Text)", callback_data=f"img_{cat}_txt_{s_type}_{m_id}_0_{uid}")],
         [InlineKeyboardButton("🖼 Screenshots (Clean Background)", callback_data=f"img_{cat}_cln_{s_type}_{m_id}_0_{uid}")],
         [InlineKeyboardButton("🔙 Go Back", callback_data=f"opt_{s_type}_{m_id}_{uid}")]
     ]
@@ -356,11 +375,11 @@ async def tmdb_paginate_images(client: Client, callback_query: CallbackQuery):
     index = max(0, min(index, len(images_list) - 1))
     img_data = images_list[index]
     full_image_url = f"{TMDB_IMAGE_BASE}{img_data['file_path']}"
-    lang_display = img_data.get('iso_639_1').upper() if img_data.get('iso_639_1') not in [None, 'xx'] else "N/A (Clean/Textless)"
+    lang_display = img_data.get('iso_639_1').upper() if img_data.get('iso_639_1') not in [None, 'xx'] else "N/A (Clean)"
     cat_display = "Landscape" if cat == "b" else "Portrait" if cat == "p" else "Transparent Logo"
     
     caption_text = (
-        f"🔍 **Subject:** {name}\n\n"
+        f"🔍 **Subject:** `{name}`\n\n"
         f"• **Format:** {cat_display}\n"
         f"• **Language Tag:** {lang_display}\n"
         f"• **Resolution:** {img_data.get('width')}x{img_data.get('height')}\n"
@@ -376,8 +395,8 @@ async def tmdb_paginate_images(client: Client, callback_query: CallbackQuery):
     back_data = f"opt_{s_type}_{m_id}_{uid}" if cat == "l" else f"sub_{cat}_{s_type}_{m_id}_{uid}"
     markup = InlineKeyboardMarkup([
         nav_buttons, 
-        [InlineKeyboardButton("🔙 Go Back", callback_data=back_data)], 
-        [InlineKeyboardButton("❌ Close", callback_data=f"close_{uid}")]
+        [InlineKeyboardButton("⬇️ Download HQ File", callback_data=f"tmdbdl_{cat}_{flt}_{s_type}_{m_id}_{index}_{uid}")],
+        [InlineKeyboardButton("🔙 Go Back", callback_data=back_data), InlineKeyboardButton("❌ Close", callback_data=f"close_{uid}")]
     ])
     
     try:
@@ -389,13 +408,56 @@ async def tmdb_paginate_images(client: Client, callback_query: CallbackQuery):
     except: 
         await callback_query.answer("⚠️ Network error while loading the image.", show_alert=True)
 
+@app.on_callback_query(filters.regex(r"^tmdbdl_"))
+async def tmdb_download_file(client: Client, callback_query: CallbackQuery):
+    data = callback_query.data.split("_")
+    cat, flt, s_type, m_id, index, uid = data[1], data[2], data[3], data[4], int(data[5]), data[6]
+    
+    if not verify_user(callback_query, uid):
+        return await callback_query.answer("⚠️ Access Denied.", show_alert=True)
+        
+    await callback_query.answer("⏳ Downloading high-res file... Please wait.", show_alert=False)
+    
+    m_type = "movie" if s_type == "m" else "tv"
+    res = requests.get(f"{TMDB_BASE_URL}/{m_type}/{m_id}/images").json()
+    cat_key = "backdrops" if cat == "b" else "posters" if cat == "p" else "logos"
+    raw_images = res.get(cat_key, [])
+    
+    if flt == "txt": images_list = [img for img in raw_images if img.get('iso_639_1') not in [None, "xx"]]
+    elif flt == "cln": images_list = [img for img in raw_images if img.get('iso_639_1') in [None, "xx"]]
+    else: images_list = raw_images
+
+    img_data = images_list[index]
+    img_url = f"{TMDB_IMAGE_BASE}{img_data['file_path']}"
+    
+    try:
+        response = requests.get(img_url, timeout=10)
+        if response.status_code == 200:
+            file_stream = io.BytesIO(response.content)
+            file_stream.name = f"TMDB_{m_id}_{cat}.jpg"
+            await client.send_document(
+                chat_id=callback_query.message.chat.id,
+                document=file_stream,
+                caption="📁 **High-Res Uncompressed Image**",
+                reply_to_message_id=callback_query.message.id
+            )
+    except Exception as e:
+        await callback_query.message.reply_text(f"❌ Network Error: {str(e)}")
+
 # ==========================================
-# 🛑 UTILITY (CLOSE, IGNORE) & INFO MENUS
+# 🛑 UTILITY (CLEAN-UP CLOSE) & INFO MENUS
 # ==========================================
 @app.on_callback_query(filters.regex(r"^close_"))
 async def close_menu(client, callback_query):
     uid = callback_query.data.split("_")[1]
     if verify_user(callback_query, uid): 
+        # MAGIC FIX: Delete the user's original URL/command message too!
+        try:
+            if callback_query.message.reply_to_message:
+                await callback_query.message.reply_to_message.delete()
+        except:
+            pass
+        # Delete the Bot's menu message
         await callback_query.message.delete()
     else:
         await callback_query.answer("⚠️ You cannot close someone else's menu.", show_alert=True)
