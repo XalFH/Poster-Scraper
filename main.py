@@ -10,6 +10,7 @@ from pyrogram.enums import ChatType
 from pyrogram.errors import UserNotParticipant
 from db import db
 from ott.ott import OTT_PLATFORMS, scrape_ott
+from commands import get_help_text
 
 # ==========================================
 # ⚙️ CONFIGURATION
@@ -403,9 +404,11 @@ async def close_menu(client, callback_query):
 async def ignore_btn(client, callback_query): 
     await callback_query.answer()
 
-@app.on_callback_query(filters.regex(r"^(about_bot|help_bot)$"))
+@app.on_callback_query(filters.regex(r"^(about_bot|help_bot|home_bot)$"))
 async def home_menus(client: Client, callback_query: CallbackQuery):
-    if callback_query.data == "about_bot":
+    data = callback_query.data
+    
+    if data == "about_bot":
         text = (
             "ℹ️ **About the Premium Extractor**\n\n"
             "This bot is a highly advanced utility designed for channel administrators, editors, and content creators.\n\n"
@@ -416,23 +419,27 @@ async def home_menus(client: Client, callback_query: CallbackQuery):
             "• API integration covering 40+ global OTT platforms.\n\n"
             "_The system accesses hidden backend APIs to provide raw image files instantly without compression._"
         )
-    else:
+        buttons = [[InlineKeyboardButton("🔙 Go Back", callback_data="home_bot")]]
+        
+    elif data == "help_bot":
+        from commands import get_help_text
+        text = get_help_text()
+        buttons = [[InlineKeyboardButton("🔙 Go Back", callback_data="home_bot")]]
+        
+    elif data == "home_bot":
         text = (
-            "❓ **How to Use the Bot**\n\n"
-            "**1. General Search (TMDB):**\n"
-            "`/p <Movie or Series Name>`\n"
-            "Example: `/p Inception` or `/p Dark 2017`\n"
-            "_(Adding the release year filters out inaccurate results)._\n\n"
-            "**2. OTT Specific Extraction:**\n"
-            "Syntax: `/<platform> <url>`\n"
-            "Platforms supported: `/nf`, `/prime`, `/zee5`, `/sonyliv`, `/hulu`, `/crunchyroll`, `/jojo` and 30+ more.\n\n"
-            "**Filtering System:**\n"
-            "• **Landscape:** Horizontal 16:9 aspect ratio.\n"
-            "• **Portrait:** Vertical 2:3 aspect ratio.\n"
-            "• **Posters:** Official Boxart containing the movie title.\n"
-            "• **Screenshots:** Pure textless backgrounds."
+            "🎬 **Welcome to the Premium Poster Extractor!** 🎬\n\n"
+            "Extract high-resolution, uncompressed posters, screenshots, and transparent logos directly from TMDB and major OTT platforms.\n\n"
+            "_Use the menu below to explore my features and commands._"
         )
-    await callback_query.answer(text, show_alert=True)
+        buttons = [
+            [InlineKeyboardButton("ℹ️ About Extractor", callback_data="about_bot"), InlineKeyboardButton("❓ Help & Commands", callback_data="help_bot")]
+        ]
+        
+    try:
+        await callback_query.message.edit_caption(caption=text, reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception as e:
+        await callback_query.answer(f"UI Error: {str(e)}", show_alert=True)
 
 if __name__ == "__main__":
     app.run()
