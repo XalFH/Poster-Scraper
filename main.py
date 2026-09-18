@@ -2,14 +2,14 @@ import asyncio
 asyncio.set_event_loop(asyncio.new_event_loop())
 
 import os
-import glob
-import importlib
 import requests
+import io
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery, InputMediaPhoto
 from pyrogram.enums import ChatType
 from pyrogram.errors import UserNotParticipant
 from db import db
+from ott.ott import OTT_PLATFORMS, scrape_ott
 
 # ==========================================
 # ⚙️ CONFIGURATION
@@ -23,23 +23,10 @@ WELCOME_IMAGE = "https://i.ibb.co/Y49BGZbp/20260823-215817.jpg"
 TMDB_BASE_URL = "https://tmdbapi.the-zake.workers.dev/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/original"
 
+# Stateless In-Memory Cache for OTT Navigation
+OTT_CACHE = {} 
+
 app = Client("PremiumPosterBot", bot_token=BOT_TOKEN, api_id=API_ID, api_hash=API_HASH)
-
-# ==========================================
-# 🔌 DYNAMIC OTT MODULE LOADER
-# ==========================================
-ott_modules = {}
-if not os.path.exists("ott"): os.makedirs("ott")
-with open("ott/__init__.py", "a") as f: pass
-
-for file_path in glob.glob("ott/*.py"):
-    module_name = os.path.basename(file_path)[:-3]
-    if module_name != "__init__":
-        try:
-            ott_modules[module_name] = importlib.import_module(f"ott.{module_name}")
-            print(f"✅ Loaded OTT Module: /{module_name}")
-        except Exception as e: 
-            print(f"❌ Failed to load {module_name}: {e}")
 
 # ==========================================
 # 🛡 STRICT MIDDLEWARES & AUTHENTICATION
@@ -47,24 +34,23 @@ for file_path in glob.glob("ott/*.py"):
 async def check_access(client: Client, message: Message, is_poster_cmd=False):
     user_id = message.from_user.id if message.from_user else None
     
-    # 1. PM BLOCKER (Allows /start, blocks extractors)
+    # PM BLOCKER
     if message.chat.type == ChatType.PRIVATE:
         if is_poster_cmd and user_id not in ADMINS:
-            await message.reply_text("⚠️ **Group Exclusive Feature**\n\nPoster extraction commands are restricted in private messages to prevent server overload. Please use this bot in an authorized group.", quote=True)
+            await message.reply_text("⚠️ **Group Exclusive Feature**\n\nPoster extraction commands are restricted in private messages. Please use this bot in an authorized group.", quote=True)
             return False
         return True 
         
-    # 2. GROUP AUTHORIZATION & FSUB
+    # GROUP AUTHORIZATION & FSUB
     if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP]:
         settings = await db.get_settings()
         auth_groups = settings.get("auth_groups", [])
         
         if len(auth_groups) > 0 and message.chat.id not in auth_groups:
-            await message.reply_text("⚠️ **Access Denied!**\n\nThis group is not authorized to utilize this bot. Contact the administrator. Leaving group...")
+            await message.reply_text("⚠️ **Access Denied!**\n\nThis group is not authorized to utilize this bot. Leaving group...")
             await message.chat.leave()
             return False
             
-        # Group Level Force Subscribe Check
         fsub_id = settings.get("fsub_id")
         fsub_link = settings.get("fsub_link")
         if fsub_id and fsub_link and user_id and user_id not in ADMINS:
@@ -72,10 +58,7 @@ async def check_access(client: Client, message: Message, is_poster_cmd=False):
                 await client.get_chat_member(fsub_id, user_id)
             except UserNotParticipant:
                 btn = [[InlineKeyboardButton("📢 Join Official Channel", url=fsub_link)]]
-                await message.reply_text(
-                    f"Hello {message.from_user.mention},\n\nYou must join our official channel to process requests in this group.",
-                    reply_markup=InlineKeyboardMarkup(btn)
-                )
+                await message.reply_text(f"Hello {message.from_user.mention},\n\nYou must join our official channel to process requests in this group.", reply_markup=InlineKeyboardMarkup(btn))
                 return False
             except Exception:
                 pass 
@@ -83,7 +66,6 @@ async def check_access(client: Client, message: Message, is_poster_cmd=False):
     return False
 
 def verify_user(callback_query: CallbackQuery, uid: str):
-    """Stateless verification: Checks if the user clicking matches the ID stored in the button"""
     clicker_id = callback_query.from_user.id
     if clicker_id != int(uid) and clicker_id not in ADMINS:
         return False
@@ -121,7 +103,7 @@ async def set_fsub(client, message):
         await message.reply_text("❌ **Invalid Format:** `/setfsub -100xxx https://t.me/...`")
 
 # ==========================================
-# 🎬 MAIN BOT & DYNAMIC OTT COMMANDS
+# 🎬 CENTRAL OTT COMMAND HANDLER
 # ==========================================
 @app.on_message(filters.command("start"))
 async def start_cmd(client: Client, message: Message):
@@ -138,36 +120,135 @@ async def start_cmd(client: Client, message: Message):
     ])
     await message.reply_photo(photo=WELCOME_IMAGE, caption=text, reply_markup=buttons)
 
-valid_commands = list(ott_modules.keys())
-if valid_commands:
-    @app.on_message(filters.command(valid_commands))
-    async def dynamic_ott_cmd(client: Client, message: Message):
-        if not await check_access(client, message, is_poster_cmd=True): return
-        cmd = message.command[0].lower()
-        if len(message.command) < 2: 
-            return await message.reply_text(f"⚠️ **Missing URL.** Example: `/{cmd} <url>`", reply_to_message_id=message.id)
+@app.on_message(filters.command(OTT_PLATFORMS))
+async def dynamic_ott_cmd(client: Client, message: Message):
+    if not await check_access(client, message, is_poster_cmd=True): return
+    cmd = message.command[0].lower()
+    if len(message.command) < 2: 
+        return await message.reply_text(f"⚠️ **Missing URL.** Example: `/{cmd} <url>`", quote=True)
+    
+    url = message.text.split(" ", 1)[1].strip()
+    msg = await message.reply_text(f"🔄 Processing **{cmd.upper()}** payload via API... ⏳", quote=True)
+    
+    data = scrape_ott(cmd, url)
+    
+    if data and isinstance(data, dict):
+        uid = str(message.from_user.id if message.from_user else 0)
+        cache_id = str(msg.id)
         
-        url = message.text.split(" ", 1)[1].strip()
-        msg = await message.reply_text(f"🔄 Processing **{cmd.upper()}** payload... ⏳", reply_to_message_id=message.id)
+        # Save to stateless dictionary mapping
+        data['platform'] = cmd
+        OTT_CACHE[cache_id] = data
         
-        try:
-            data = ott_modules[cmd].scrape(url) if hasattr(ott_modules[cmd], "scrape") else None
-            if data:
-                user_mention = message.from_user.mention if message.from_user else "Anonymous"
-                caption = (
-                    f"👤 **Requested By:** {user_mention}\n"
-                    f"🔗 **Source Query:** `/{cmd} {url}`\n\n"
-                    f"🖼 **Main {cmd.upper()} Poster:**\n{data['main_poster']}\n\n"
-                    f"📱 **Portrait View:** [Direct Link]({data['portrait']})\n\n"
-                    f"🌄 **Cover/Landscape:** [Direct Link]({data['cover']})\n\n"
-                    f"🎬 **Title:** **{data['title']}**"
-                )
-                await message.reply_photo(photo=data['main_poster'], caption=caption, reply_to_message_id=message.id)
-                await msg.delete()
-            else: 
-                await msg.edit_text("⚠️ **Extraction Failed.** The link might be invalid, or the platform's DRM blocked the request.")
-        except Exception as e: 
-            await msg.edit_text(f"⚠️ **Runtime Error:** {str(e)}")
+        init_img = data.get("landscape") or data.get("portrait") or data.get("cover")
+        if not init_img:
+            return await msg.edit_text("⚠️ **Extraction Failed.** Valid images were not provided by the API.")
+            
+        buttons = []
+        if data.get("landscape"): buttons.append([InlineKeyboardButton("🌄 Landscape", callback_data=f"ottcb_landscape_{cache_id}_{uid}")])
+        if data.get("portrait"): buttons.append([InlineKeyboardButton("🖼 Portrait", callback_data=f"ottcb_portrait_{cache_id}_{uid}")])
+        if data.get("cover"): buttons.append([InlineKeyboardButton("📚 Cover", callback_data=f"ottcb_cover_{cache_id}_{uid}")])
+        buttons.append([InlineKeyboardButton("❌ Close Menu", callback_data=f"close_{uid}")])
+        
+        caption = (
+            f"🎬 **Title:** **{data.get('title', 'Unknown Title')}**\n"
+            f"🌐 **Platform:** {cmd.upper()}\n\n"
+            f"_Please select an image format below:_"
+        )
+        
+        await message.reply_photo(photo=init_img, caption=caption, reply_markup=InlineKeyboardMarkup(buttons), reply_to_message_id=message.id)
+        await msg.delete()
+    else: 
+        await msg.edit_text("⚠️ **Extraction Failed.** The link might be invalid, or the API encountered an error.")
+
+# ==========================================
+# 🖥 OTT MENU CALLBACKS (VIEW & DOWNLOAD)
+# ==========================================
+@app.on_callback_query(filters.regex(r"^ottcb_"))
+async def ott_view_image(client: Client, callback_query: CallbackQuery):
+    _, img_format, cache_id, uid = callback_query.data.split("_")
+    
+    if not verify_user(callback_query, uid):
+        return await callback_query.answer("⚠️ This menu belongs to someone else.", show_alert=True)
+        
+    data = OTT_CACHE.get(cache_id)
+    if not data:
+        return await callback_query.answer("⚠️ Session Expired! Please request again.", show_alert=True)
+    
+    img_url = data.get(img_format)
+    caption = (
+        f"🎬 **Title:** **{data.get('title', 'Unknown')}**\n"
+        f"📐 **Format:** {img_format.capitalize()}\n\n"
+        f"🔗 **Raw Image:** [Direct Link]({img_url})"
+    )
+    
+    buttons = [
+        [InlineKeyboardButton("⬇️ Download as File", callback_data=f"ottdl_{img_format}_{cache_id}_{uid}")],
+        [InlineKeyboardButton("🔙 Go Back", callback_data=f"ottback_{cache_id}_{uid}")],
+        [InlineKeyboardButton("❌ Close", callback_data=f"close_{uid}")]
+    ]
+    
+    try:
+        await callback_query.edit_message_media(media=InputMediaPhoto(media=img_url, caption=caption), reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception:
+        await callback_query.answer("⚠️ Network error while rendering image.", show_alert=True)
+
+@app.on_callback_query(filters.regex(r"^ottback_"))
+async def ott_go_back(client: Client, callback_query: CallbackQuery):
+    _, cache_id, uid = callback_query.data.split("_")
+    
+    if not verify_user(callback_query, uid):
+        return await callback_query.answer("⚠️ Access Denied.", show_alert=True)
+        
+    data = OTT_CACHE.get(cache_id)
+    if not data:
+        return await callback_query.answer("⚠️ Session Expired!", show_alert=True)
+        
+    init_img = data.get("landscape") or data.get("portrait") or data.get("cover")
+    
+    buttons = []
+    if data.get("landscape"): buttons.append([InlineKeyboardButton("🌄 Landscape", callback_data=f"ottcb_landscape_{cache_id}_{uid}")])
+    if data.get("portrait"): buttons.append([InlineKeyboardButton("🖼 Portrait", callback_data=f"ottcb_portrait_{cache_id}_{uid}")])
+    if data.get("cover"): buttons.append([InlineKeyboardButton("📚 Cover", callback_data=f"ottcb_cover_{cache_id}_{uid}")])
+    buttons.append([InlineKeyboardButton("❌ Close Menu", callback_data=f"close_{uid}")])
+    
+    caption = f"🎬 **Title:** **{data.get('title', 'Unknown')}**\n🌐 **Platform:** {data.get('platform', '').upper()}\n\n_Please select an image format below:_"
+    
+    try:
+        await callback_query.edit_message_media(media=InputMediaPhoto(media=init_img, caption=caption), reply_markup=InlineKeyboardMarkup(buttons))
+    except Exception:
+        pass
+
+@app.on_callback_query(filters.regex(r"^ottdl_"))
+async def ott_download_file(client: Client, callback_query: CallbackQuery):
+    _, img_format, cache_id, uid = callback_query.data.split("_")
+    
+    if not verify_user(callback_query, uid):
+        return await callback_query.answer("⚠️ Access Denied.", show_alert=True)
+        
+    data = OTT_CACHE.get(cache_id)
+    if not data:
+        return await callback_query.answer("⚠️ Session Expired!", show_alert=True)
+        
+    img_url = data.get(img_format)
+    await callback_query.answer("⏳ Downloading file securely... Please wait.", show_alert=False)
+    
+    try:
+        response = requests.get(img_url, timeout=10)
+        if response.status_code == 200:
+            file_stream = io.BytesIO(response.content)
+            file_stream.name = f"{data.get('title', 'Poster').replace(' ', '_')}_{img_format}.jpg"
+            
+            await client.send_document(
+                chat_id=callback_query.message.chat.id,
+                document=file_stream,
+                caption=f"📁 **{img_format.capitalize()} High-Res Image**\n🎬 **Title:** {data.get('title')}",
+                reply_to_message_id=callback_query.message.id
+            )
+        else:
+            await callback_query.message.reply_text("❌ Failed to fetch the image from the server.")
+    except Exception as e:
+        await callback_query.message.reply_text(f"❌ Network Error: {str(e)}")
 
 # ==========================================
 # 🔍 TMDB SEARCH SYSTEM
@@ -211,10 +292,10 @@ async def search_media(client: Client, message: Message):
     await msg.edit_text(f"🔍 **Search Query:** `{raw_query}`\n\n✨ **Select the correct media:**", reply_markup=InlineKeyboardMarkup(buttons))
 
 # ==========================================
-# 📱 DYNAMIC MENUS (SMART FILTERS)
+# 📱 TMDB DYNAMIC MENUS
 # ==========================================
 @app.on_callback_query(filters.regex(r"^opt_"))
-async def show_main_options(client: Client, callback_query: CallbackQuery):
+async def tmdb_main_options(client: Client, callback_query: CallbackQuery):
     data = callback_query.data.split("_")
     s_type, m_id, uid = data[1], data[2], data[3]
     
@@ -232,7 +313,7 @@ async def show_main_options(client: Client, callback_query: CallbackQuery):
     await callback_query.message.edit_text(f"✨ **{type_label} Selected!**\n\nPlease choose an aspect ratio format:", reply_markup=InlineKeyboardMarkup(buttons))
 
 @app.on_callback_query(filters.regex(r"^sub_"))
-async def show_sub_options(client: Client, callback_query: CallbackQuery):
+async def tmdb_sub_options(client: Client, callback_query: CallbackQuery):
     data = callback_query.data.split("_")
     cat, s_type, m_id, uid = data[1], data[2], data[3], data[4]
     
@@ -249,12 +330,12 @@ async def show_sub_options(client: Client, callback_query: CallbackQuery):
     await callback_query.message.edit_text(f"**{cat_label} Formatting Options:**\n\nDo you want the official Boxart (with text) or a clean screenshot?", reply_markup=InlineKeyboardMarkup(buttons))
 
 @app.on_callback_query(filters.regex(r"^img_"))
-async def paginate_images(client: Client, callback_query: CallbackQuery):
+async def tmdb_paginate_images(client: Client, callback_query: CallbackQuery):
     data = callback_query.data.split("_")
     cat, flt, s_type, m_id, index, uid = data[1], data[2], data[3], data[4], int(data[5]), data[6]
     
     if not verify_user(callback_query, uid):
-        return await callback_query.answer("⚠️ Access Denied. Initiate your own request.", show_alert=True)
+        return await callback_query.answer("⚠️ Access Denied.", show_alert=True)
         
     m_type = "movie" if s_type == "m" else "tv"
     movie_info = requests.get(f"{TMDB_BASE_URL}/{m_type}/{m_id}").json()
@@ -332,7 +413,7 @@ async def home_menus(client: Client, callback_query: CallbackQuery):
             "• Extracts 4K & UHD Backgrounds (Clean/Textless).\n"
             "• Extracts Official Boxart & Posters (With Text/Titles).\n"
             "• Extracts Transparent Logos.\n"
-            "• Direct DRM bypass integration for major OTT platforms (Netflix, Prime Video, etc.).\n\n"
+            "• API integration covering 40+ global OTT platforms.\n\n"
             "_The system accesses hidden backend APIs to provide raw image files instantly without compression._"
         )
     else:
@@ -343,8 +424,8 @@ async def home_menus(client: Client, callback_query: CallbackQuery):
             "Example: `/p Inception` or `/p Dark 2017`\n"
             "_(Adding the release year filters out inaccurate results)._\n\n"
             "**2. OTT Specific Extraction:**\n"
-            "`/nf <Netflix URL>` - Extracts Netflix Boxart, Portrait & Cover.\n"
-            "`/prime <Prime URL>` - Extracts Amazon Prime Video high-res thumbnails.\n\n"
+            "Syntax: `/<platform> <url>`\n"
+            "Platforms supported: `/nf`, `/prime`, `/zee5`, `/sonyliv`, `/hulu`, `/crunchyroll`, `/jojo` and 30+ more.\n\n"
             "**Filtering System:**\n"
             "• **Landscape:** Horizontal 16:9 aspect ratio.\n"
             "• **Portrait:** Vertical 2:3 aspect ratio.\n"
