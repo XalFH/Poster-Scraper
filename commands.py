@@ -2,7 +2,7 @@
 
 OTT_COMMANDS = {
     "nf": "Netflix",
-    "prime": "Amazon Prime Video",
+    "prime": "Amazon Prime",
     "bms": "BookMyShow",
     "zee5": "ZEE5",
     "sonyliv": "SonyLIV",
@@ -28,7 +28,7 @@ OTT_COMMANDS = {
     "sainaplay": "Saina Play",
     "shemaroo": "ShemarooMe",
     "sunnxt": "Sun NXT",
-    "tataplay": "Tata Play Binge",
+    "tataplay": "Tata Play",
     "ticketnew": "TicketNew",
     "tubi": "Tubi TV",
     "ultra": "Ultra",
@@ -41,22 +41,25 @@ OTT_COMMANDS = {
     "yt": "YouTube",
     "aaonxt": "AAO NXT",
     "addatimes": "Addatimes",
-    # Added some more platforms
     "jiocinema": "JioCinema",
     "discovery": "Discovery+",
     "paramount": "Paramount+",
-    "altbalaji": "ALTT (ALTBalaji)"
+    "altbalaji": "ALTT"
 }
 
 def get_help_text():
-    """Generates a formatted string of all available commands for the Help Menu."""
-    text = "❓ **Supported OTT Platforms & Commands**\n\n"
-    text += "**Usage:** `/<command> <url>`\n\n"
+    """Generates a beautiful, compact UI string for the Help Menu to fit Telegram's caption limits."""
+    text = "🎯 **Supported OTT Platforms**\n"
+    text += "💡 **Usage:** `/<command> <url>`\n\n"
     
-    # Sort commands alphabetically for a cleaner look
+    # Format compactly: `/cmd` (Name)
+    formatted_cmds = []
     for cmd in sorted(OTT_COMMANDS.keys()):
         name = OTT_COMMANDS[cmd]
-        text += f"• `/{cmd}` - {name}\n"
+        formatted_cmds.append(f"`/{cmd}` ({name})")
         
-    text += "\n*...and many more added soon!*"
+    # Join with a separator for a clean grid-like look
+    text += " • ".join(formatted_cmds)
+    
+    text += "\n\n✨ *...and many more being added soon!*"
     return text
